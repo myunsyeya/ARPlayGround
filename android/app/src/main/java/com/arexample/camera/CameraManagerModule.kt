@@ -85,6 +85,16 @@ class CameraManagerModule private constructor() : PermissionListener {
         fun getInstance(): CameraManagerModule {
             return instance ?: CameraManagerModule().also { instance = it }
         }
+        
+        // 네이티브 라이브러리 로딩
+        init {
+            try {
+                System.loadLibrary("yuv-to-rgb")
+                Log.i(TAG, "YUV to RGB 네이티브 라이브러리 로드 성공")
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "네이티브 라이브러리 로드 실패: ${e.message}")
+            }
+        }
     }
 
     private var cameraDevice: CameraDevice? = null
@@ -476,7 +486,7 @@ class CameraManagerModule private constructor() : PermissionListener {
      * 등록된 프레임 처리 리스너를 통해 AI 모델 처리를 수행합니다.
      * 
      * 처리 흐름:
-     * 1. YUV 이미지를 RGB 비트맵으로 변환 (imageToBitmap)
+     * 1. YUV 이미지를 RGB 비트맵으로 변환 (yuv420ToBitmap)
      * 2. 모델 입력 크기에 맞게 비트맵 리사이징 (resizeBitmap)
      * 3. 리스너가 등록된 경우 비동기적으로 프레임 처리 요청
      * 4. 결과 처리 및 메모리 리소스 해제
@@ -492,7 +502,7 @@ class CameraManagerModule private constructor() : PermissionListener {
      */
     private fun processImage(image: Image) {
         try {
-            val bitmap = imageToBitmap(image)
+            val bitmap = yuv420ToBitmap(image)
             // 처리를 위해 이미지를 리사이징합니다 (모델 입력 크기에 맞춤)
             val resizedBitmap = resizeBitmap(bitmap, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
             
@@ -532,6 +542,99 @@ class CameraManagerModule private constructor() : PermissionListener {
         }
     }
     
+    /**
+     * YUV에서 RGB로 이미지를 변환하는 네이티브 메소드
+     *
+     * @param yuv420sp YUV 형식의 이미지 데이터 바이트 배열
+     * @param width 이미지 너비
+     * @param height 이미지 높이
+     * @param outBitmap 결과를 저장할 출력 비트맵
+     * @return 성공 시 0, 실패 시 오류 코드
+     */
+    private external fun convertYuvToRgbNative(yuv420sp: ByteArray, width: Int, height: Int, outBitmap: Bitmap): Int
+
+    /**
+     * YUV_420_888 이미지를 RGBA 비트맵으로 변환
+     *
+     * @param image YUV_420_888 형식의 이미지
+     * @return RGBA 비트맵
+     */
+    private fun yuv420ToBitmap(image: Image): Bitmap {
+        val width = image.width
+        val height = image.height
+        
+        // 출력 비트맵 생성
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        
+        // YUV 평면 가져오기
+        val planes = image.planes
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+        
+        // YUV 데이터 복사
+        val yBuffer = yPlane.buffer
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+        
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+        
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        
+        // Y 데이터 복사
+        yBuffer.get(nv21, 0, ySize)
+        
+        // UV 데이터 복사 (NV21 형식으로)
+        val uvPos = ySize
+        if (vBuffer.remaining() > 0) {
+            vBuffer.get(nv21, uvPos, vBuffer.remaining())
+        }
+        if (uBuffer.remaining() > 0) {
+            uBuffer.get(nv21, uvPos + vBuffer.remaining(), uBuffer.remaining())
+        }
+        
+        // 네이티브 메소드 호출하여 YUV에서 RGB로 변환
+        val result = convertYuvToRgbNative(nv21, width, height, bitmap)
+        if (result != 0) {
+            Log.e(TAG, "YUV에서 RGB로 변환 실패: 오류 코드 $result")
+        }
+        
+        return bitmap
+    }
+
+    /**
+     * 비트맵을 지정된 크기로 리사이징합니다.
+     * 
+     * 이 메서드는 입력 이미지의 비율을 유지하면서 목표 크기로 변환합니다.
+     * 안드로이드의 Matrix 클래스를 사용하여 이미지 변환을 수행합니다.
+     * 
+     * 알고리즘:
+     * 1. 입력 비트맵과 목표 크기 기반으로 스케일 계수 계산
+     * 2. Matrix 변환을 사용하여 이미지 리사이징
+     * 
+     * 시간복잡도: O(W₁*H₁) [W₁,H₁은 원본 이미지 크기]
+     * 공간복잡도: O(W₂*H₂) [W₂,H₂는 목표 이미지 크기]
+     * 
+     * 참고: Matrix 변환은 안드로이드 시스템 내부적으로 최적화되어 있습니다.
+     * 
+     * @param bitmap 원본 비트맵
+     * @param width 목표 너비
+     * @param height 목표 높이
+     * @return 리사이징된 비트맵
+     */
+    private fun resizeBitmap(bitmap: Bitmap, width: Int, height: Int): Bitmap {
+        val matrix = Matrix()
+        val scaleWidth = width.toFloat() / bitmap.width
+        val scaleHeight = height.toFloat() / bitmap.height
+        matrix.postScale(scaleWidth, scaleHeight)
+        
+        return Bitmap.createBitmap(
+            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+        )
+    }
+
     /**
      * YUV -> RGB 변환을 위한 계수들을 초기화합니다.
      * 이 방식은 전체 LUT보다 메모리 사용량이 훨씬 적습니다.
@@ -576,228 +679,5 @@ class CameraManagerModule private constructor() : PermissionListener {
         }
         
         coefficientsInitialized = true
-    }
-
-    /**
-     * YUV_420_888 포맷 이미지를 RGB888 비트맵으로 효율적으로 변환합니다.
-     * 
-     * 이 알고리즘은 다음과 같은 최적화 기법을 사용합니다:
-     * 1. 사전 계산된 YUV->RGB 변환 계수 테이블 활용 - 메모리 효율을 위해 전체 LUT 대신 부분 테이블 사용
-     * 2. 직접 버퍼 접근을 통한 데이터 처리 - 중간 변환 단계 최소화
-     * 3. 2x2 픽셀 블록 단위 처리 - YUV420 서브샘플링 구조 활용
-     * 4. 루프 최적화 및 경계 체크 - 안정성과 성능 보장
-     * 
-     * 시간복잡도:
-     * - 초기화 단계 (계수 계산): O(256²) [한 번만 수행]
-     * - 메인 변환 루프: O(W*H) [W=너비, H=높이]
-     * - 전체 알고리즘: O(W*H)
-     * 
-     * 공간복잡도:
-     * - 임시 버퍼: O(W*H) [출력 비트맵 + ARGB 배열 + YUV 배열]
-     * - 계수 테이블: O(256²) [미리 계산된 UV 조합 테이블]
-     * 
-     * @param image 변환할 Image 객체 (YUV_420_888 포맷)
-     * @return 변환된 ARGB8888 비트맵
-     * @throws Exception 이미지 변환 중 오류 발생 시
-     */
-    private fun imageToBitmap(image: Image): Bitmap {
-        try {
-            val width = image.width
-            val height = image.height
-            
-            // 너비와 높이가 0이면 빈 비트맵 반환
-            if (width <= 0 || height <= 0) {
-                Log.e(TAG, "이미지 크기가 유효하지 않음: $width x $height")
-                return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-            }
-            
-            // 평면 데이터 유효성 확인
-            if (image.planes.size < 3) {
-                Log.e(TAG, "YUV 평면 부족: ${image.planes.size}")
-                return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            }
-            
-            // 메모리 효율 최적화: 비트맵과 작업 배열을 재사용할 수 있도록 클래스 멤버로 변경 가능
-            val outputBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val argbArray = IntArray(width * height)
-            
-            // YUV420 포맷 처리
-            val yPlane = image.planes[0]
-            val uPlane = image.planes[1]
-            val vPlane = image.planes[2]
-            
-            // 평면 데이터 기본 정보
-            val yBuffer = yPlane.buffer
-            val uBuffer = uPlane.buffer
-            val vBuffer = vPlane.buffer
-            
-            // 버퍼가 비어있는지 확인
-            if (!yBuffer.hasRemaining() || !uBuffer.hasRemaining() || !vBuffer.hasRemaining()) {
-                Log.e(TAG, "이미지 버퍼가 비어있음")
-                return outputBitmap
-            }
-            
-            val yRowStride = yPlane.rowStride
-            val uvRowStride = uPlane.rowStride
-            val uvPixelStride = uPlane.pixelStride
-            
-            // 직접 버퍼 접근
-            // Y 평면 직접 접근 (빠른 처리를 위해)
-            val yArray = ByteArray(yBuffer.remaining())
-            yBuffer.get(yArray)
-            
-            // U 평면 직접 접근
-            val uArray = ByteArray(uBuffer.remaining())
-            uBuffer.get(uArray)
-            
-            // V 평면 직접 접근
-            val vArray = ByteArray(vBuffer.remaining())
-            vBuffer.get(vArray)
-            
-            // 변환 계수 초기화 (한 번만 수행)
-            // 참고: 실제 앱 구현 시 이 함수는 카메라 초기화 단계에서 한 번만 호출되도록 이동할 수 있음
-            if (!coefficientsInitialized) {
-                initYuvToRgbCoefficients()
-            }
-            
-            // 프레임에서 일반적으로 사용되는 패턴 활용
-            var index = 0
-            
-            // 픽셀 변환 - 최적화된 루프와 경계 체크 추가
-            val lastJ = height - (height % 2) // 높이가 홀수인 경우 대비
-            val lastI = width - (width % 2)   // 너비가 홀수인 경우 대비
-            
-            for (j in 0 until lastJ step 2) {
-                var pY = j * yRowStride
-                var pUV = (j shr 1) * uvRowStride
-                
-                for (i in 0 until lastI step 2) {
-                    // 경계를 벗어나지 않도록 확인
-                    if (pY + yRowStride + 1 >= yArray.size || 
-                        pUV >= uArray.size || 
-                        pUV >= vArray.size) {
-                        // 다음 픽셀로 이동
-                        pY += 2
-                        pUV += uvPixelStride
-                        index += 2
-                        continue
-                    }
-                    
-                    // 2x2 픽셀 블록 처리 (YUV420 서브샘플링 단위)
-                    val y1 = yArray[pY].toInt() and 0xFF
-                    val y2 = yArray[pY + 1].toInt() and 0xFF
-                    val y3 = yArray[pY + yRowStride].toInt() and 0xFF
-                    val y4 = yArray[pY + yRowStride + 1].toInt() and 0xFF
-                    
-                    val u = uArray[pUV].toInt() and 0xFF
-                    val v = vArray[pUV].toInt() and 0xFF
-                    
-                    // 사전 계산된 계수 활용
-                    val rOffset = vCoefficients[v].toInt()
-                    val bOffset = uCoefficients[u].toInt()
-                    val gOffset = uvCoefficients[u * 256 + v].toInt()
-                    
-                    // 각 픽셀의 배열 인덱스 경계 확인
-                    if (index < argbArray.size) {
-                        // 픽셀 1 (좌상단)
-                        var r = y1 + rOffset
-                        var g = y1 + gOffset
-                        var b = y1 + bOffset
-                        
-                        r = r.coerceIn(0, 255)
-                        g = g.coerceIn(0, 255)
-                        b = b.coerceIn(0, 255)
-                        
-                        argbArray[index] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                    }
-                    
-                    if (index + 1 < argbArray.size) {
-                        // 픽셀 2 (우상단)
-                        var r = y2 + rOffset
-                        var g = y2 + gOffset
-                        var b = y2 + bOffset
-                        
-                        r = r.coerceIn(0, 255)
-                        g = g.coerceIn(0, 255)
-                        b = b.coerceIn(0, 255)
-                        
-                        argbArray[index + 1] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                    }
-                    
-                    if (index + width < argbArray.size) {
-                        // 픽셀 3 (좌하단)
-                        var r = y3 + rOffset
-                        var g = y3 + gOffset
-                        var b = y3 + bOffset
-                        
-                        r = r.coerceIn(0, 255)
-                        g = g.coerceIn(0, 255)
-                        b = b.coerceIn(0, 255)
-                        
-                        argbArray[index + width] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                    }
-                    
-                    if (index + width + 1 < argbArray.size) {
-                        // 픽셀 4 (우하단)
-                        var r = y4 + rOffset
-                        var g = y4 + gOffset
-                        var b = y4 + bOffset
-                        
-                        r = r.coerceIn(0, 255)
-                        g = g.coerceIn(0, 255)
-                        b = b.coerceIn(0, 255)
-                        
-                        argbArray[index + width + 1] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                    }
-                    
-                    pY += 2
-                    pUV += uvPixelStride
-                    index += 2
-                }
-                
-                index += width // 다음 행으로 이동
-            }
-            
-            // 비트맵 픽셀 설정
-            outputBitmap.setPixels(argbArray, 0, width, 0, 0, width, height)
-            
-            return outputBitmap
-        } catch (e: Exception) {
-            Log.e(TAG, "이미지를 비트맵으로 변환 중 오류 발생: ${e.message}")
-            e.printStackTrace()
-            // 오류 발생 시 빈 비트맵 반환
-            return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-        }
-    }
-    
-    /**
-     * 비트맵을 지정된 크기로 리사이징합니다.
-     * 
-     * 이 메서드는 입력 이미지의 비율을 유지하면서 목표 크기로 변환합니다.
-     * 안드로이드의 Matrix 클래스를 사용하여 이미지 변환을 수행합니다.
-     * 
-     * 알고리즘:
-     * 1. 입력 비트맵과 목표 크기 기반으로 스케일 계수 계산
-     * 2. Matrix 변환을 사용하여 이미지 리사이징
-     * 
-     * 시간복잡도: O(W₁*H₁) [W₁,H₁은 원본 이미지 크기]
-     * 공간복잡도: O(W₂*H₂) [W₂,H₂는 목표 이미지 크기]
-     * 
-     * 참고: Matrix 변환은 안드로이드 시스템 내부적으로 최적화되어 있습니다.
-     * 
-     * @param bitmap 원본 비트맵
-     * @param width 목표 너비
-     * @param height 목표 높이
-     * @return 리사이징된 비트맵
-     */
-    private fun resizeBitmap(bitmap: Bitmap, width: Int, height: Int): Bitmap {
-        val matrix = Matrix()
-        val scaleWidth = width.toFloat() / bitmap.width
-        val scaleHeight = height.toFloat() / bitmap.height
-        matrix.postScale(scaleWidth, scaleHeight)
-        
-        return Bitmap.createBitmap(
-            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
-        )
     }
 } 
