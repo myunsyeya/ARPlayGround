@@ -3,6 +3,7 @@ package com.arexample.camera
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.annotations.ReactProp
 
 /**
  * React Native 카메라 뷰 매니저
@@ -17,7 +18,7 @@ import com.facebook.react.uimanager.ThemedReactContext
  * const CameraView = requireNativeComponent('CameraView');
  * 
  * // JSX에서 사용
- * <CameraView style={{ flex: 1 }} />
+ * <CameraView style={{ flex: 1 }} processingEnabled={true} />
  * ```
  */
 @ReactModule(name = RNCCameraViewManager.REACT_CLASS)
@@ -50,5 +51,18 @@ class RNCCameraViewManager : SimpleViewManager<RNCCameraView>() {
     override fun createViewInstance(reactContext: ThemedReactContext): RNCCameraView {
         CameraManagerModule.getInstance().setReactContext(reactContext.reactApplicationContext)
         return RNCCameraView(reactContext)
+    }
+    
+    /**
+     * 이미지 처리 활성화 속성을 설정합니다.
+     * 
+     * React Native에서 processingEnabled 속성을 설정할 때 호출됩니다.
+     * 
+     * @param view 속성을 설정할 RNCCameraView 인스턴스
+     * @param enabled 활성화 여부
+     */
+    @ReactProp(name = "processingEnabled", defaultBoolean = true)
+    fun setProcessingEnabled(view: RNCCameraView, enabled: Boolean) {
+        view.setProcessingEnabled(enabled)
     }
 } 

@@ -116,4 +116,12 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+    
+    // TensorFlow Lite 종속성
+    implementation 'org.tensorflow:tensorflow-lite:2.13.0'
+    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
+    
+    // Kotlin 관련 종속성
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
+    implementation "androidx.core:core-ktx:1.10.0"
 }

@@ -1,10 +1,14 @@
 package com.arexample.camera
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.SurfaceTexture
 import android.util.AttributeSet
 import android.util.Log
 import android.view.TextureView
+import android.widget.FrameLayout
+import android.widget.ImageView
 import com.facebook.react.uimanager.ThemedReactContext
 
 /**
@@ -20,10 +24,18 @@ import com.facebook.react.uimanager.ThemedReactContext
  * val cameraView = RNCCameraView(themedReactContext)
  * ```
  */
-class RNCCameraView : TextureView, TextureView.SurfaceTextureListener {
+class RNCCameraView : FrameLayout, TextureView.SurfaceTextureListener, FrameProcessorListener {
     
     private val cameraManager: CameraManagerModule = CameraManagerModule.getInstance()
+    private val modelProcessor: ModelProcessor = ModelProcessor.getInstance()
     private val tag = "RNCCameraView"
+    
+    // UI 컴포넌트
+    private val textureView: TextureView
+    private val overlayImageView: ImageView
+    
+    // AI 처리 관련 변수
+    private var isProcessingEnabled = false
     
     /**
      * React Native 컨텍스트를 사용하여 뷰를 초기화합니다.
@@ -31,7 +43,26 @@ class RNCCameraView : TextureView, TextureView.SurfaceTextureListener {
      * @param context React Native의 ThemedReactContext
      */
     constructor(context: ThemedReactContext) : super(context) {
+        // TextureView 생성 및 설정
+        textureView = TextureView(context)
+        textureView.layoutParams = LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.MATCH_PARENT
+        )
+        
+        // 오버레이 ImageView 생성 및 설정
+        overlayImageView = ImageView(context)
+        overlayImageView.layoutParams = LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.MATCH_PARENT
+        )
+        
+        // FrameLayout에 뷰 추가
+        addView(textureView)
+        addView(overlayImageView)
+        
         setupView()
+        tryLoadModel(context)
     }
     
     /**
@@ -41,8 +72,24 @@ class RNCCameraView : TextureView, TextureView.SurfaceTextureListener {
      * @param attrs 속성 집합
      */
     constructor(context: Context, attrs: AttributeSet) : super(context, attrs) {
+        textureView = TextureView(context)
+        textureView.layoutParams = LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.MATCH_PARENT
+        )
+        
+        overlayImageView = ImageView(context)
+        overlayImageView.layoutParams = LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.MATCH_PARENT
+        )
+        
+        addView(textureView)
+        addView(overlayImageView)
+        
         if (context is ThemedReactContext) {
             setupView()
+            tryLoadModel(context)
         } else {
             Log.e(tag, "올바른 React 컨텍스트가 전달되지 않았습니다")
         }
@@ -54,7 +101,41 @@ class RNCCameraView : TextureView, TextureView.SurfaceTextureListener {
      * SurfaceTextureListener를 설정합니다.
      */
     private fun setupView() {
-        surfaceTextureListener = this
+        textureView.surfaceTextureListener = this
+    }
+    
+    /**
+     * 모델을 로드합니다.
+     * 
+     * 모델 로드가 실패해도 카메라는 계속 작동합니다.
+     */
+    private fun tryLoadModel(context: Context) {
+        try {
+            // 모델 파일 경로 (assets 폴더 내)
+            val modelPath = "model.tflite"
+            
+            // 백그라운드에서 모델 로드 시도
+            Thread {
+                try {
+                    val success = modelProcessor.loadModel(context, modelPath)
+                    if (success) {
+                        // 모델 로드 성공 시 실시간 처리 활성화
+                        isProcessingEnabled = true
+                        post {
+                            // UI 스레드에서 실행
+                            cameraManager.setRealTimeProcessing(true, this)
+                        }
+                        Log.d(tag, "모델 로드 성공 및 처리 활성화")
+                    } else {
+                        Log.e(tag, "모델 로드 실패")
+                    }
+                } catch (e: Exception) {
+                    Log.e(tag, "모델 로드 중 오류: ${e.message}")
+                }
+            }.start()
+        } catch (e: Exception) {
+            Log.e(tag, "모델 로드 시도 중 오류: ${e.message}")
+        }
     }
     
     /**
@@ -67,7 +148,7 @@ class RNCCameraView : TextureView, TextureView.SurfaceTextureListener {
      * @param height 표면의 높이
      */
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-        cameraManager.setupCamera(this)
+        cameraManager.setupCamera(textureView)
     }
     
     /**
@@ -111,5 +192,56 @@ class RNCCameraView : TextureView, TextureView.SurfaceTextureListener {
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         cameraManager.stopCamera()
+        modelProcessor.close()
+    }
+    
+    /**
+     * 프레임 처리 리스너 구현 (FrameProcessorListener 인터페이스)
+     * 
+     * 이 메서드는 카메라에서 새 프레임이 사용 가능할 때 호출됩니다.
+     * 
+     * @param bitmap 처리할 비트맵 이미지
+     * @return 처리 결과 비트맵 (오버레이용)
+     */
+    override fun onFrameAvailable(bitmap: Bitmap): Bitmap? {
+        if (!isProcessingEnabled) {
+            return null
+        }
+        
+        try {
+            // 모델 프로세서를 통해 이미지 처리
+            val resultBitmap = modelProcessor.processImage(bitmap)
+            
+            // 결과가 있으면 UI 스레드에서 오버레이 표시
+            resultBitmap?.let { result ->
+                post {
+                    try {
+                        overlayImageView.setImageBitmap(result)
+                    } catch (e: Exception) {
+                        Log.e(tag, "오버레이 표시 오류: ${e.message}")
+                    }
+                }
+            }
+            
+            return null // 반환 값은 사용하지 않음
+        } catch (e: Exception) {
+            Log.e(tag, "프레임 처리 오류: ${e.message}")
+            return null
+        }
+    }
+    
+    /**
+     * 이미지 처리 활성화/비활성화 설정
+     * 
+     * @param enabled 활성화 여부
+     */
+    fun setProcessingEnabled(enabled: Boolean) {
+        isProcessingEnabled = enabled
+        cameraManager.setRealTimeProcessing(enabled, if (enabled) this else null)
+        
+        // 처리 비활성화 시 오버레이 이미지 제거
+        if (!enabled) {
+            post { overlayImageView.setImageBitmap(null) }
+        }
     }
 } 
