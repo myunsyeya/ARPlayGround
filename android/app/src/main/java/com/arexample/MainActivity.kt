@@ -3,6 +3,7 @@ package com.arexample
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.facebook.react.ReactActivity
@@ -89,9 +90,9 @@ class MainActivity : ReactActivity() {
     super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
       if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-        // 권한이 허용됨
+        Log.d("MainActivity", "카메라 권한이 허용되었습니다")
       } else {
-        // 권한이 거부됨
+        Log.e("MainActivity", "카메라 권한이 거부되었습니다")
       }
     }
   }

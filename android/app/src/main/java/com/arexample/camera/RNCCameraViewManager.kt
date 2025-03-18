@@ -3,6 +3,7 @@ package com.arexample.camera
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.annotations.ReactProp
 
 /**
  * React Native 카메라 뷰 매니저
@@ -17,7 +18,7 @@ import com.facebook.react.uimanager.ThemedReactContext
  * const CameraView = requireNativeComponent('RNCCameraView');
  * 
  * // JSX에서 사용
- * <CameraView style={{ flex: 1 }} />
+ * <CameraView style={{ flex: 1 }} saveImages={true} />
  * ```
  */
 @ReactModule(name = RNCCameraViewManager.REACT_CLASS)
@@ -50,5 +51,18 @@ class RNCCameraViewManager : SimpleViewManager<RNCCameraView>() {
     override fun createViewInstance(reactContext: ThemedReactContext): RNCCameraView {
         CameraManagerModule.getInstance().setReactContext(reactContext.reactApplicationContext)
         return RNCCameraView(reactContext)
+    }
+    
+    /**
+     * 비트맵 이미지 저장 기능 활성화 여부를 설정합니다.
+     * 
+     * React Native에서 'saveImages' 프로퍼티를 통해 제어할 수 있습니다.
+     * 
+     * @param view 대상 RNCCameraView
+     * @param enabled 활성화 여부
+     */
+    @ReactProp(name = "saveImages")
+    fun setSaveImages(view: RNCCameraView, enabled: Boolean) {
+        view.setSaveImagesEnabled(enabled)
     }
 } 
