@@ -30,6 +30,7 @@ import com.facebook.react.modules.core.PermissionListener
 import java.util.Collections
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.lang.ref.WeakReference
 
 /**
  * 실시간 프레임 처리 리스너 인터페이스
@@ -106,7 +107,7 @@ class CameraManagerModule private constructor() : PermissionListener {
     private var cameraCaptureSession: CameraCaptureSession? = null
     private var captureRequestBuilder: CaptureRequest.Builder? = null
     private var reactContext: ReactApplicationContext? = null
-    private var textureView: TextureView? = null
+    private var textureView: WeakReference<TextureView>? = null
     private var pendingTextureView: TextureView? = null
     
     // 프레임 처리 관련 변수
@@ -130,6 +131,9 @@ class CameraManagerModule private constructor() : PermissionListener {
     private val uvCoefficients = FloatArray(256 * 256)
     private var coefficientsInitialized = false
 
+    // 카메라 초기화 상태를 추적하는 변수
+    private var isCameraInitialized = false
+
     /**
      * React Native 컨텍스트를 설정합니다.
      * 
@@ -149,7 +153,7 @@ class CameraManagerModule private constructor() : PermissionListener {
      * @param textureView 카메라 미리보기를 표시할 TextureView
      */
     fun setupCamera(textureView: TextureView) {
-        this.textureView = textureView
+        this.textureView = WeakReference(textureView)
         
         reactContext?.let { context ->
             if (hasCameraPermission(context)) {
@@ -207,7 +211,7 @@ class CameraManagerModule private constructor() : PermissionListener {
                 Log.d(TAG, "카메라 권한이 허용되었습니다")
                 // 권한이 허용된 후에 카메라 설정 진행
                 pendingTextureView?.let {
-                    textureView = it
+                    textureView = WeakReference(it)
                     setupCameraInternal()
                     pendingTextureView = null
                 }
@@ -231,8 +235,10 @@ class CameraManagerModule private constructor() : PermissionListener {
         startBackgroundThread()
         setupCameraId()
         
-        if (textureView?.isAvailable == true) {
+        val currentTextureView = textureView?.get()
+        if (currentTextureView?.isAvailable == true) {
             openCamera()
+            isCameraInitialized = true
         }
     }
 
@@ -348,11 +354,11 @@ class CameraManagerModule private constructor() : PermissionListener {
      */
     private fun createCameraPreviewSession() {
         val device = cameraDevice ?: return
-        val view = textureView ?: return
+        val currentTextureView = textureView?.get() ?: return
         val size = previewSize ?: return
         
         try {
-            val texture = view.surfaceTexture ?: return
+            val texture = currentTextureView.surfaceTexture ?: return
             
             texture.setDefaultBufferSize(size.width, size.height)
             val surface = Surface(texture)
@@ -679,5 +685,54 @@ class CameraManagerModule private constructor() : PermissionListener {
         }
         
         coefficientsInitialized = true
+    }
+
+    /**
+     * 카메라 프리뷰 크기를 업데이트합니다.
+     * 
+     * @param width 새 너비
+     * @param height 새 높이
+     */
+    fun updatePreviewSize(width: Int, height: Int) {
+        if (cameraDevice == null || !isCameraInitialized) {
+            return
+        }
+        
+        try {
+            // 현재 카메라 세션 중단
+            cameraCaptureSession?.stopRepeating()
+            
+            // 텍스처뷰 레이아웃 크기 업데이트
+            val currentTextureView = textureView?.get()
+            currentTextureView?.layoutParams?.width = width
+            currentTextureView?.layoutParams?.height = height
+            currentTextureView?.requestLayout()
+            
+            // 카메라 세션 재시작
+            captureRequestBuilder?.build()?.let { request ->
+                cameraCaptureSession?.setRepeatingRequest(request, null, backgroundHandler)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "프리뷰 크기 업데이트 실패: ${e.message}")
+        }
+    }
+    
+    /**
+     * 사용자 지정 크기로 카메라를 설정합니다.
+     * 
+     * @param textureView 프리뷰를 표시할 TextureView
+     * @param width 사용자 지정 너비
+     * @param height 사용자 지정 높이
+     */
+    fun setupCamera(textureView: TextureView, width: Int, height: Int) {
+        this.textureView = WeakReference(textureView)
+        
+        // 사용자 지정 크기로 레이아웃 업데이트
+        textureView.layoutParams.width = width
+        textureView.layoutParams.height = height
+        textureView.requestLayout()
+        
+        // 기본 설정으로 카메라 초기화
+        setupCamera(textureView)
     }
 } 

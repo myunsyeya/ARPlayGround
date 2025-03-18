@@ -18,7 +18,7 @@ import com.facebook.react.uimanager.annotations.ReactProp
  * const CameraView = requireNativeComponent('CameraView');
  * 
  * // JSX에서 사용
- * <CameraView style={{ flex: 1 }} processingEnabled={true} />
+ * <CameraView style={{ width: 300, height: 400 }} processingEnabled={true} />
  * ```
  */
 @ReactModule(name = RNCCameraViewManager.REACT_CLASS)
@@ -64,5 +64,31 @@ class RNCCameraViewManager : SimpleViewManager<RNCCameraView>() {
     @ReactProp(name = "processingEnabled", defaultBoolean = true)
     fun setProcessingEnabled(view: RNCCameraView, enabled: Boolean) {
         view.setProcessingEnabled(enabled)
+    }
+    
+    /**
+     * 뷰 너비를 설정합니다.
+     * 
+     * React Native에서 width 속성을 설정할 때 호출됩니다.
+     * 
+     * @param view 속성을 설정할 RNCCameraView 인스턴스
+     * @param width 설정할 너비(픽셀)
+     */
+    @ReactProp(name = "width")
+    fun setWidth(view: RNCCameraView, width: Int) {
+        view.setViewWidth(width)
+    }
+    
+    /**
+     * 뷰 높이를 설정합니다.
+     * 
+     * React Native에서 height 속성을 설정할 때 호출됩니다.
+     * 
+     * @param view 속성을 설정할 RNCCameraView 인스턴스
+     * @param height 설정할 높이(픽셀)
+     */
+    @ReactProp(name = "height")
+    fun setHeight(view: RNCCameraView, height: Int) {
+        view.setViewHeight(height)
     }
 } 
